@@ -66,6 +66,7 @@ use Telegram::Bot::Object::Message;
 
 # base class for building telegram robots with Mojolicious
 has longpoll_time => 60;
+has connection_attempts => 5;
 has ua         => sub { Mojo::UserAgent->new->inactivity_timeout(shift->longpoll_time + 15) };
 has token      => sub { croak "you need to supply your own token"; };
 
@@ -364,10 +365,27 @@ sub _post_request {
   my $url  = shift;
   my $form_args = shift || {};
 
-  my $res = $self->ua->post($url, form => $form_args)->result;
-  if    ($res->is_success) { return $res->json->{result}; }
-  elsif ($res->is_error)   { die "Failed to post: " . $res->json->{description}; }
-  else                     { die "Not sure what went wrong"; }
+  my ($is_success, $result, $tries) = (undef, undef, $self->connection_attempts);
+  do {
+    my $tx = $self->ua->post($url, form => $form_args);
+
+    if (my $error = $tx->error) {
+      if ($error->{code}) {
+        warn "Failed to post: " . $error->{message};
+      } else {
+        warn "Connection error: " . $error->{message};
+      }
+    } else {
+      if ($tx->result->is_success) {
+        $is_success = 1;
+        $result = $tx->result->json->{result};
+      }
+    }
+
+    $tries--;
+  } while !$is_success && $tries > 0;
+
+  return $result;
 }
 
 
